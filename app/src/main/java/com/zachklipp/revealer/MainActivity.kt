@@ -1,38 +1,37 @@
 package com.zachklipp.revealer
 
+import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Surface
-import androidx.compose.material.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.tooling.preview.Preview
-import com.zachklipp.revealer.ui.theme.RevealerTheme
+import androidx.compose.material.darkColors
+import androidx.compose.runtime.CompositionLocalProvider
+import coil.ImageLoader
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
+import com.google.accompanist.coil.LocalImageLoader
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+
+    val imageLoader = ImageLoader.Builder(this)
+      .componentRegistry {
+        if (SDK_INT >= 28) {
+          add(ImageDecoderDecoder())
+        } else {
+          add(GifDecoder())
+        }
+      }
+      .build()
+
     setContent {
-      RevealerTheme {
-        // A surface container using the 'background' color from the theme
-        Surface(color = MaterialTheme.colors.background) {
-          Greeting("Android")
+      MaterialTheme(colors = darkColors()) {
+        CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+          App()
         }
       }
     }
-  }
-}
-
-@Composable
-fun Greeting(name: String) {
-  Text(text = "Hello $name!")
-}
-
-@Preview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-  RevealerTheme {
-    Greeting("Android")
   }
 }
