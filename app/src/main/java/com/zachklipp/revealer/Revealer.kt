@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
@@ -16,9 +17,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.Layout
@@ -29,6 +30,7 @@ import androidx.compose.ui.layout.Placeable.PlacementScope
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.SubcomposeMeasureScope
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.round
@@ -36,34 +38,44 @@ import androidx.compose.ui.unit.round
 @Stable
 interface RevealerScope {
   @Composable fun Revealable(
-    content: @Composable (RevealableState) -> Unit
+    state: RevealableState,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
   )
+
+  @Stable
+  fun Modifier.matchRevealedWidth(): Modifier
 }
 
 @Stable
 interface RevealableState {
   val isFullyCollapsed: Boolean
   val isFullyExpanded: Boolean
+  val isExpanding: Boolean
+  val expandedFraction: Float
+
   suspend fun reveal(animationSpec: AnimationSpec<Float> = SpringSpec())
   suspend fun unreveal(animationSpec: AnimationSpec<Float> = SpringSpec())
 }
 
+@Composable fun rememberRevealableState(): RevealableState {
+  return remember { RevealableStateImpl() }
+}
+
 @Composable fun Revealer(
-  placeholder: Modifier = Modifier,
+  modifier: Modifier = Modifier,
   content: @Composable RevealerScope.() -> Unit
 ) {
-  val rememberedPlaceholder = rememberUpdatedState(placeholder)
-  val state = remember { RevealerState(rememberedPlaceholder) }
+  val state = remember { RevealerState() }
 
   SubcomposeLayout(
-    Modifier.onGloballyPositioned {
+    modifier.onGloballyPositioned {
       state.revealerCoordinates = it
     }
   ) { constraints ->
     state.revealerConstraints = constraints
     state.subcomposeMeasureScope = this
 
-    println("OMG subcomposing Revealer")
     val mainMeasurable = subcompose(Unit) {
       Box {
         state.content()
@@ -90,29 +102,21 @@ interface RevealableState {
   }
 }
 
-private class RevealableStateImpl(
-  private val revealerState: RevealerState,
-  val key: Int
-) : RevealableState {
+private class RevealableStateImpl : RevealableState {
 
-  var content: @Composable (RevealableState) -> Unit by mutableStateOf({})
-
-  var measurable: Measurable? = null
-  private lateinit var placeable: Placeable
-
-  var placeholderOffset: Offset by mutableStateOf(Offset.Zero)
-  var layerOffset: Offset by mutableStateOf(Offset.Zero)
-
-  val revealAnimation = Animatable(0f)
-
-  private var cachedPlaceholderConstraints: Constraints? by mutableStateOf(null)
-  var cachedPlaceholderSize: IntSize? by mutableStateOf(null)
+  private val revealAnimation = Animatable(0f)
 
   override val isFullyCollapsed: Boolean
     get() = revealAnimation.value == 0f
 
   override val isFullyExpanded: Boolean
     get() = revealAnimation.value == 1f
+
+  override val isExpanding: Boolean
+    get() = revealAnimation.targetValue == 1f
+
+  override val expandedFraction: Float
+    get() = revealAnimation.value
 
   override suspend fun reveal(animationSpec: AnimationSpec<Float>) {
     revealAnimation.animateTo(1f, animationSpec)
@@ -121,6 +125,25 @@ private class RevealableStateImpl(
   override suspend fun unreveal(animationSpec: AnimationSpec<Float>) {
     revealAnimation.animateTo(0f, animationSpec)
   }
+}
+
+private class RevealableController(
+  private val revealerState: RevealerState,
+  state: State<RevealableState>,
+  val key: Int
+) {
+  private val state by state
+
+  var content: @Composable () -> Unit by mutableStateOf({})
+
+  var measurable: Measurable? = null
+  private lateinit var placeable: Placeable
+
+  var placeholderOffset: Offset by mutableStateOf(Offset.Zero)
+  var layerOffset: Offset by mutableStateOf(Offset.Zero)
+
+  private var cachedPlaceholderConstraints: Constraints? by mutableStateOf(null)
+  var cachedPlaceholderSize: IntSize? by mutableStateOf(null)
 
   fun updatePlaceholderConstraints(constraints: Constraints) {
     cachedPlaceholderConstraints = constraints
@@ -136,7 +159,7 @@ private class RevealableStateImpl(
   fun measure() {
     // Always register a read for the animation, even if the measure has already been done and
     // cached, so we get re-laid-out when the animation starts.
-    revealAnimation.value
+    state.expandedFraction
     needsSubcompose = true
     requestPlaceholderMeasure()
   }
@@ -148,13 +171,22 @@ private class RevealableStateImpl(
     layerOffset = placeholderOffset
 
     val offset = when {
-      isFullyCollapsed -> placeholderOffset
-      isFullyExpanded -> Offset.Zero
-      else -> lerp(placeholderOffset, Offset.Zero, revealAnimation.value)
+      state.isFullyCollapsed -> placeholderOffset
+      state.isFullyExpanded -> Offset.Zero
+      else -> lerp(placeholderOffset, Offset.Zero, state.expandedFraction)
     }
 
     with(scope) {
-      placeable.placeRelative(offset.round())
+      placeable.placeRelative(
+        position = offset.round(),
+        // Revealables that are expanded should be drawn on top of those which aren't.
+        // Those which are expandING should be drawn on top of those which are collapsing.
+        zIndex = when {
+          state.isFullyCollapsed -> 0f
+          state.isExpanding -> 2f
+          else -> 1f
+        }
+      )
     }
 
     subcomposedWithScope = null
@@ -170,8 +202,8 @@ private class RevealableStateImpl(
     val placeholderConstraints = checkNotNull(cachedPlaceholderConstraints)
 
     val constraints: Constraints = when {
-      isFullyCollapsed -> placeholderConstraints
-      isFullyExpanded -> revealerState.revealerConstraints!!
+      state.isFullyCollapsed -> placeholderConstraints
+      state.isFullyExpanded -> revealerState.revealerConstraints!!
       else -> {
         lerp(
           // While animating, set the max constraints so the content can immediately ask to fill
@@ -183,21 +215,19 @@ private class RevealableStateImpl(
             maxHeight = cachedPlaceholderSize!!.height
           ),
           stop = revealerState.revealerConstraints!!,
-          fraction = revealAnimation.value
+          fraction = state.expandedFraction
         )
       }
     }
 
     placeable = measurable.measure(constraints)
 
-    if (isFullyCollapsed) {
+    if (state.isFullyCollapsed) {
       cachedPlaceholderSize = IntSize(placeable.width, placeable.height)
     }
   }
 
   private fun requestSubcompose() {
-    println("OMG [$key] requestSubcompose: measurable=$measurable, needsSubcompose=$needsSubcompose, subcomposedWithScope=$subcomposedWithScope, subcomposeMeasureScope=${revealerState.subcomposeMeasureScope}")
-
     // We're already measured, nothing to do.
     if (measurable != null) return
 
@@ -222,43 +252,32 @@ private class RevealableStateImpl(
             this@drawWithContent.drawContent()
           }
         }) {
-          content(this@RevealableStateImpl)
+          content()
         }
       }.single()
     }
   }
 }
 
-private class RevealerState(
-  private val placeholder: State<Modifier>
-) : RevealerScope {
+private class RevealerState : RevealerScope {
 
-  fun summarize(): String =
-    "${revealables.size} revealables: ${
-      revealables.toList().joinToString { it.second.key.toString() }
-    }"
-
-  var revealerConstraints: Constraints? = null
+  var revealerConstraints: Constraints? by mutableStateOf(null)
   var revealerCoordinates: LayoutCoordinates? by mutableStateOf(null)
 
   /** Only non-null while the revealer's layout is laying out. */
   var subcomposeMeasureScope: SubcomposeMeasureScope? = null
 
-  val revealables: MutableMap<Int, RevealableStateImpl> = mutableStateMapOf()
+  val revealables: MutableMap<Int, RevealableController> = mutableStateMapOf()
 
   @Composable override fun Revealable(
-    content: @Composable (RevealableState) -> Unit
+    state: RevealableState,
+    modifier: Modifier,
+    content: @Composable () -> Unit
   ) {
     val key = currentCompositeKeyHash
-    val state = remember { getOrCreateRevealable(key) }
-    state.content = content
-
-    DisposableEffect(Unit) {
-      println("OMG [$key] placeholder entered composition")
-      onDispose {
-        println("OMG [$key] placeholder left composition")
-      }
-    }
+    val rememberedState = rememberUpdatedState(state)
+    val controller = remember { getOrCreateRevealable(key, rememberedState) }
+    controller.content = content
 
     DisposableEffect(Unit) {
       onDispose {
@@ -267,15 +286,15 @@ private class RevealerState(
     }
 
     Layout(
-      content = { Box(placeholder.value) },
+      // TODO can this be passed to the layout directly?
+      content = { Box(modifier) },
       modifier = Modifier.onGloballyPositioned { coordinates ->
-        state.placeholderOffset = revealerCoordinates!!.localPositionOf(coordinates, Offset.Zero)
+        controller.placeholderOffset =
+          revealerCoordinates!!.localPositionOf(coordinates, Offset.Zero)
       }
     ) { measurables, constraints ->
-      println("OMG [$key] measuring placeholder…")
-
       // This will ensure cachedPlaceholderSize is set.
-      state.updatePlaceholderConstraints(constraints)
+      controller.updatePlaceholderConstraints(constraints)
 
       // Once the real content has been composed, force the placeholder to be its size. Until then,
       // the size is determined solely by the placeholder. This will happen when, for example,
@@ -285,13 +304,15 @@ private class RevealerState(
       // measure the placeholder as zero initially, then when scrolling down, the new item will
       // jump fully into view.
       val placeholderConstraints =
-        state.cachedPlaceholderSize?.let { Constraints.fixed(it.width, it.height) }
+        controller.cachedPlaceholderSize?.let { Constraints.fixed(it.width, it.height) }
           ?: constraints
       val placeholderPlaceable = measurables.single().measure(placeholderConstraints)
-      val size = state.cachedPlaceholderSize ?: IntSize(
+      val size = controller.cachedPlaceholderSize ?: IntSize(
         placeholderPlaceable.width,
         placeholderPlaceable.height
       )
+
+      println("OMG [$key] measured revealable: $size")
 
       layout(width = size.width, height = size.height) {
         placeholderPlaceable.placeRelative(0, 0)
@@ -299,40 +320,20 @@ private class RevealerState(
     }
   }
 
-  private fun getOrCreateRevealable(key: Int): RevealableStateImpl {
+  override fun Modifier.matchRevealedWidth(): Modifier = composed {
+    with(LocalDensity.current) {
+      val maxWidth = revealerConstraints!!.maxWidth.toDp()
+      widthIn(min = maxWidth, max = maxWidth)
+    }
+  }
+
+  private fun getOrCreateRevealable(
+    key: Int,
+    state: State<RevealableState>
+  ): RevealableController {
     check(key !in revealables)
-    return RevealableStateImpl(this, key).also {
-      println("OMG [$key] created new RevealableState for $this")
+    return RevealableController(this, state, key).also {
       revealables[key] = it
     }
   }
-}
-
-private fun lerp(start: Constraints, stop: Constraints, fraction: Float): Constraints {
-  val startMinSize = Size(
-    width = start.minWidth.toFloat(),
-    height = start.minHeight.toFloat()
-  )
-  val startMaxSize = Size(
-    width = start.maxWidth.toFloat(),
-    height = start.maxHeight.toFloat()
-  )
-
-  val targetMinSize = Size(
-    width = stop.minWidth.toFloat(),
-    height = stop.minHeight.toFloat()
-  )
-  val targetMaxSize = Size(
-    width = stop.maxWidth.toFloat(),
-    height = stop.maxHeight.toFloat()
-  )
-  val actualMinSize = lerp(startMinSize, targetMinSize, fraction)
-  val actualMaxSize = lerp(startMaxSize, targetMaxSize, fraction)
-
-  return Constraints(
-    minWidth = actualMinSize.width.toInt(),
-    minHeight = actualMinSize.height.toInt(),
-    maxWidth = actualMaxSize.width.toInt(),
-    maxHeight = actualMaxSize.height.toInt()
-  )
 }

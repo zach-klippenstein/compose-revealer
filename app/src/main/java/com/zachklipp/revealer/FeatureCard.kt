@@ -8,7 +8,11 @@ import androidx.compose.ui.layout.ContentScale
 import com.google.accompanist.coil.CoilImage
 import com.zachklipp.revealer.ContentModel.FeatureModel
 
-@Composable fun FeatureCard(model: FeatureModel, modifier: Modifier = Modifier) {
+@Composable fun FeatureCard(
+  model: FeatureModel,
+  modifier: Modifier = Modifier,
+  imageModifier: Modifier = Modifier
+) {
   Column(modifier) {
     ContentHeading(
       title = model.title,
@@ -18,7 +22,7 @@ import com.zachklipp.revealer.ContentModel.FeatureModel
     CoilImage(
       data = model.heroImage,
       contentDescription = "hero image",
-      modifier = Modifier.aspectRatio(1f),
+      modifier = imageModifier,
       contentScale = ContentScale.FillHeight
     )
   }

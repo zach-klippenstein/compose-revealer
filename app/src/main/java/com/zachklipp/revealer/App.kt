@@ -2,6 +2,8 @@ package com.zachklipp.revealer
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -10,19 +12,25 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.Card
+import androidx.compose.material.Icon
+import androidx.compose.material.IconButton
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Scaffold
 import androidx.compose.material.Surface
@@ -32,12 +40,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.primarySurface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -49,7 +60,6 @@ import com.zachklipp.revealer.ContentModel.AppModel
 import com.zachklipp.revealer.ContentModel.FeatureModel
 import com.zachklipp.revealer.ContentModel.TrendingModel
 import com.zachklipp.revealer.ContentModel.TrendingModel.TrendingApp
-import com.zachklipp.revealer.R.drawable
 import kotlinx.coroutines.launch
 
 private val longDescription = buildAnnotatedString {
@@ -69,7 +79,7 @@ private val longDescription = buildAnnotatedString {
 
 val cards = listOf(
   AppModel(
-    heroImage = drawable.app,
+    heroImage = R.drawable.app,
     title = "Title",
     subtitle = "Subtitle",
     shortDescription = "Description\nWith lots of lines.",
@@ -112,7 +122,14 @@ val cards = listOf(
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable fun App() {
-  val revealSpec = remember { /*spring<Float>() */tween<Float>(1000) }
+  val revealSpec = remember {
+    tween<Float>(1000)
+    spring<Float>(
+      stiffness = Spring.StiffnessLow,
+      dampingRatio = Spring.DampingRatioLowBouncy
+    )
+  }
+  val scope = rememberCoroutineScope()
 
   Scaffold(
     topBar = {
@@ -123,9 +140,9 @@ val cards = listOf(
     }
   ) {
     Revealer(
-      // Specify a default placeholder size of a square, so items don't jump into view when
-      // scrolling down.
-      placeholder = Modifier.aspectRatio(1f)
+      // // Specify a default placeholder size of a square, so items don't jump into view when
+      // // scrolling down.
+      // revealablePlaceholder = Modifier.aspectRatio(1f)
     ) {
       LazyColumn {
         items(cards) { model ->
@@ -133,53 +150,100 @@ val cards = listOf(
           // scrolling correctly, but only show the indication on the revealable content.
           val interactionSource = remember { MutableInteractionSource() }
           val indication = LocalIndication.current
+          val revealableState = rememberRevealableState()
 
           ContentCard(Modifier.clickable(
             interactionSource = interactionSource,
             indication = null,
             onClickLabel = "open card",
             onClick = {
-              // scope.launch {
-              //   revealableState.reveal(revealSpec)
-              // }
+              scope.launch {
+                revealableState.reveal(revealSpec)
+              }
             }
           )) {
-            Revealable { revealableState ->
-              val scope = rememberCoroutineScope()
+            Revealable(
+              state = revealableState,
+              // Specify a default placeholder size of a square, so items don't jump into view when
+              // scrolling down.
+              // TODO figure out how to avoid jumping
+              modifier = Modifier.heightIn(min = 50.dp).fillMaxWidth()
+            ) {
               val scrollState = rememberScrollState()
 
+              fun dismissRevealable() {
+                scope.launch {
+                  launch { revealableState.unreveal(revealSpec) }
+                  // Reset scroll position.
+                  launch { scrollState.animateScrollTo(0, revealSpec) }
+                }
+              }
+
               if (!revealableState.isFullyCollapsed) {
-                BackHandler(onBack = {
-                  scope.launch {
-                    launch { revealableState.unreveal(revealSpec) }
-                    // Reset scroll position.
-                    launch { scrollState.animateScrollTo(0, revealSpec) }
-                  }
-                })
+                BackHandler(onBack = ::dismissRevealable)
               }
 
               Surface(
-                if (revealableState.isFullyCollapsed) {
-                  Modifier.indication(interactionSource, indication)
-                } else {
-                  Modifier.fillMaxSize()
-                }
+                Modifier
+                  .indication(interactionSource, indication)
+                  .then(if (revealableState.isFullyCollapsed) Modifier else Modifier.fillMaxSize())
               ) {
-                Column(
-                  if (!revealableState.isFullyCollapsed) {
-                    Modifier.verticalScroll(scrollState)
-                  } else Modifier
-                ) {
-                  when (model) {
-                    is AppModel -> {
-                      AppCard(model)
+                Box {
+                  Column(
+                    if (!revealableState.isFullyCollapsed) {
+                      Modifier.verticalScroll(scrollState)
+                    } else Modifier
+                  ) {
+                    Box {
+                      when (model) {
+                        is AppModel -> AppCard(
+                          model,
+                          imageModifier = Modifier
+                            .wrapContentSize(unbounded = true)
+                            .matchRevealedWidth()
+                        )
+                        is FeatureModel -> FeatureCard(
+                          model,
+                          imageModifier = Modifier
+                            .wrapContentSize(align = Alignment.BottomStart, unbounded = true)
+                            .matchRevealedWidth()
+                            .height(300.dp)
+                        )
+                        is TrendingModel -> TrendingCard(model)
+                      }
 
-                      if (!revealableState.isFullyCollapsed) {
-                        Text(model.longDescription, Modifier.padding(16.dp))
+                      // Close button
+                      IconButton(
+                        onClick = ::dismissRevealable,
+                        modifier = Modifier
+                          .align(Alignment.TopEnd)
+                          .padding(16.dp)
+                          .alpha(revealableState.expandedFraction)
+                      ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
                       }
                     }
-                    is FeatureModel -> FeatureCard(model)
-                    is TrendingModel -> TrendingCard(model)
+
+                    // Expanded content.
+                    if (!revealableState.isFullyCollapsed) {
+                      val longTextModifier = Modifier
+                        .wrapContentSize(unbounded = true)
+                        // Don't animate the width of the text as the card is expanded – words
+                        // jumping from line to line looks very janky, and text layout is expensive
+                        // so animating it is probably a bad idea.
+                        .matchRevealedWidth()
+                        .padding(16.dp)
+                        .alpha(revealableState.expandedFraction)
+
+                      when (model) {
+                        is AppModel -> {
+                          Text(model.longDescription, longTextModifier)
+                        }
+                        is FeatureModel -> {
+                          Text(model.longDescription, longTextModifier)
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -234,7 +298,8 @@ val cards = listOf(
     Surface(Modifier.fillMaxSize()) {
       Column {
         Card(Modifier.padding(16.dp)) {
-          Revealable { revealableState ->
+          val revealableState = rememberRevealableState()
+          Revealable(revealableState) {
             val revealScope = rememberCoroutineScope()
 
             Card {
@@ -272,7 +337,8 @@ val cards = listOf(
           }
         }
         Card(Modifier.padding(16.dp)) {
-          Revealable {
+          val revealableState = rememberRevealableState()
+          Revealable(revealableState) {
             Text("Other card")
           }
         }

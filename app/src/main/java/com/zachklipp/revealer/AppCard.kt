@@ -3,7 +3,6 @@ package com.zachklipp.revealer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.Text
@@ -19,13 +18,15 @@ import com.zachklipp.revealer.ContentModel.AppModel
 
 @Composable fun AppCard(
   appModel: AppModel,
-  modifier: Modifier = Modifier
+  modifier: Modifier = Modifier,
+  imageModifier: Modifier = Modifier
 ) {
-  Box(modifier.aspectRatio(1f)) {
+  Box(modifier) {
     CoilImage(
       data = appModel.heroImage,
       contentDescription = "hero image",
-      contentScale = ContentScale.FillHeight,
+      contentScale = ContentScale.FillWidth,
+      modifier = imageModifier
     )
 
     ContentHeading(appModel.title, appModel.subtitle)

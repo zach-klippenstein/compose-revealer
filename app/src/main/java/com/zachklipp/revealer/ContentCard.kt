@@ -1,5 +1,6 @@
 package com.zachklipp.revealer
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -22,7 +23,7 @@ import androidx.compose.ui.unit.dp
 }
 
 @Composable fun ContentHeading(title: String, subtitle: String) {
-  Column(Modifier.padding(16.dp)) {
+  Column(Modifier.padding(16.dp).animateContentSize()) {
     Text(
       subtitle,
       style = MaterialTheme.typography.subtitle1,
