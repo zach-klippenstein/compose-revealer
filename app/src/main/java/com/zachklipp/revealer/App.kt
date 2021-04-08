@@ -2,12 +2,14 @@ package com.zachklipp.revealer
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,7 +17,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,16 +45,28 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.primarySurface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource.Drag
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.zachklipp.revealer.ContentModel.AppModel
@@ -152,102 +165,169 @@ val cards = listOf(
           val indication = LocalIndication.current
           val revealableState = rememberRevealableState()
 
-          ContentCard(Modifier.clickable(
-            interactionSource = interactionSource,
-            indication = null,
-            onClickLabel = "open card",
-            onClick = {
-              scope.launch {
-                revealableState.reveal(revealSpec)
-              }
-            }
-          )) {
-            Revealable(
-              state = revealableState,
-              // Specify a default placeholder size of a square, so items don't jump into view when
-              // scrolling down.
-              // TODO figure out how to avoid jumping
-              modifier = Modifier.heightIn(min = 50.dp).fillMaxWidth()
-            ) {
-              val scrollState = rememberScrollState()
+          var isPressed by remember { mutableStateOf(false) }
 
-              fun dismissRevealable() {
-                scope.launch {
-                  launch { revealableState.unreveal(revealSpec) }
-                  // Reset scroll position.
-                  launch { scrollState.animateScrollTo(0, revealSpec) }
+          // ContentCard(Modifier.clickable(
+          //   interactionSource = interactionSource,
+          //   indication = null,
+          //   onClickLabel = "open card",
+          //   onClick = {
+          //     scope.launch {
+          //       revealableState.reveal(revealSpec)
+          //     }
+          //   }
+          // )) {
+          Revealable(
+            state = revealableState,
+            // Specify a default placeholder size of a square, so items don't jump into view when
+            // scrolling down.
+            // TODO figure out how to avoid jumping
+            modifier = Modifier
+              .padding(16.dp)
+              .heightIn(min = 50.dp)
+              .fillMaxWidth()
+              // TODO cancel gesture if another item is clicked
+              .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                  isPressed = true
+                  try {
+                    awaitRelease()
+                    scope.launch {
+                      revealableState.reveal(revealSpec)
+                    }
+                  } finally {
+                    isPressed = false
+                  }
+                })
+              }
+          ) {
+            val scrollState = rememberScrollState()
+            var pullingToDismiss by remember { mutableStateOf(false) }
+            val pullAmount = remember { Animatable(0f) }
+
+            val nestedConnection = remember {
+              object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                  if (!pullingToDismiss) return Offset.Zero
+
+                  // We're in the middle of a pull down, block scrolling up.
+                  return Offset(x = 0f, y = onPull(available.y))
+                }
+
+                override fun onPostScroll(
+                  consumed: Offset,
+                  available: Offset,
+                  source: NestedScrollSource
+                ): Offset {
+                  if (!pullingToDismiss && available.y > 0 && source == Drag) {
+                    pullingToDismiss = true
+                    // Only consume vertical scroll.
+                    return Offset(x = 0f, y = onPull(available.y))
+                  }
+                  return Offset.Zero
+                }
+
+                private fun onPull(available: Float): Float {
+                  val newTarget = pullAmount.value + available
+                  scope.launch {
+                    pullAmount.snapTo(newTarget)
+                  }
+                  return available
+                }
+
+                override suspend fun onPreFling(available: Velocity): Velocity {
+                  // This event means the scroll was released.
+                  pullingToDismiss = false
+                  pullAmount.animateTo(0f)
+                  return Velocity.Zero
                 }
               }
+            }
+            val pressedScale = animateFloatAsState(if (isPressed) .93f else 1f)
+            val finalScale by derivedStateOf {
+              pressedScale.value * (1f - (pullAmount.value / 400))
+            }
 
-              if (!revealableState.isFullyCollapsed) {
-                BackHandler(onBack = ::dismissRevealable)
+            fun dismissRevealable() {
+              scope.launch {
+                launch { revealableState.unreveal(revealSpec) }
+                // Reset scroll position.
+                launch { scrollState.animateScrollTo(0, revealSpec) }
               }
+            }
 
-              Surface(
-                Modifier
-                  .indication(interactionSource, indication)
-                  .then(if (revealableState.isFullyCollapsed) Modifier else Modifier.fillMaxSize())
-              ) {
-                Box {
-                  Column(
-                    if (!revealableState.isFullyCollapsed) {
-                      Modifier.verticalScroll(scrollState)
-                    } else Modifier
-                  ) {
-                    Box {
-                      when (model) {
-                        is AppModel -> AppCard(
-                          model,
-                          imageModifier = Modifier
-                            .wrapContentSize(unbounded = true)
-                            .matchRevealedWidth()
-                        )
-                        is FeatureModel -> FeatureCard(
-                          model,
-                          imageModifier = Modifier
-                            .wrapContentSize(align = Alignment.BottomStart, unbounded = true)
-                            .matchRevealedWidth()
-                            .height(300.dp)
-                        )
-                        is TrendingModel -> TrendingCard(model)
-                      }
+            if (!revealableState.isFullyCollapsed) {
+              BackHandler(onBack = ::dismissRevealable)
+            }
 
-                      // Close button
-                      IconButton(
-                        onClick = ::dismissRevealable,
-                        modifier = Modifier
-                          .align(Alignment.TopEnd)
-                          .padding(16.dp)
-                          .alpha(revealableState.expandedFraction)
-                      ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
-                      }
+            Surface(
+              Modifier
+                .indication(interactionSource, indication)
+                .then(if (revealableState.isFullyCollapsed) Modifier else Modifier.fillMaxSize())
+                .scale(finalScale)
+            ) {
+              Box {
+                Column(
+                  if (!revealableState.isFullyCollapsed) {
+                    Modifier
+                      .nestedScroll(nestedConnection)
+                      .verticalScroll(scrollState)
+                  } else Modifier
+                ) {
+                  Box {
+                    when (model) {
+                      is AppModel -> AppCard(
+                        model,
+                        imageModifier = Modifier
+                          .wrapContentSize(unbounded = true)
+                          .matchRevealedWidth()
+                      )
+                      is FeatureModel -> FeatureCard(
+                        model,
+                        imageModifier = Modifier
+                          .wrapContentSize(align = Alignment.BottomStart, unbounded = true)
+                          .matchRevealedWidth()
+                          .height(300.dp)
+                      )
+                      is TrendingModel -> TrendingCard(model)
                     }
 
-                    // Expanded content.
-                    if (!revealableState.isFullyCollapsed) {
-                      val longTextModifier = Modifier
-                        .wrapContentSize(unbounded = true)
-                        // Don't animate the width of the text as the card is expanded – words
-                        // jumping from line to line looks very janky, and text layout is expensive
-                        // so animating it is probably a bad idea.
-                        .matchRevealedWidth()
+                    // Close button
+                    IconButton(
+                      onClick = ::dismissRevealable,
+                      modifier = Modifier
+                        .align(Alignment.TopEnd)
                         .padding(16.dp)
                         .alpha(revealableState.expandedFraction)
+                    ) {
+                      Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                  }
 
-                      when (model) {
-                        is AppModel -> {
-                          Text(model.longDescription, longTextModifier)
-                        }
-                        is FeatureModel -> {
-                          Text(model.longDescription, longTextModifier)
-                        }
+                  // Expanded content.
+                  if (!revealableState.isFullyCollapsed) {
+                    val longTextModifier = Modifier
+                      .wrapContentSize(unbounded = true)
+                      // Don't animate the width of the text as the card is expanded – words
+                      // jumping from line to line looks very janky, and text layout is expensive
+                      // so animating it is probably a bad idea.
+                      .matchRevealedWidth()
+                      .padding(16.dp)
+                      .alpha(revealableState.expandedFraction)
+
+                    when (model) {
+                      is AppModel -> {
+                        Text(model.longDescription, longTextModifier)
+                      }
+                      is FeatureModel -> {
+                        Text(model.longDescription, longTextModifier)
                       }
                     }
                   }
                 }
               }
             }
+            // }
           }
         }
       }

@@ -1,6 +1,7 @@
 package com.zachklipp.revealer
 
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.unit.Constraints
 
 internal fun lerp(start: Constraints, stop: Constraints, fraction: Float): Constraints {
@@ -21,12 +22,12 @@ internal fun lerp(start: Constraints, stop: Constraints, fraction: Float): Const
     width = stop.maxWidth.toFloat(),
     height = stop.maxHeight.toFloat()
   )
-  val actualMinSize = androidx.compose.ui.geometry.lerp(startMinSize, targetMinSize, fraction)
-  val actualMaxSize = androidx.compose.ui.geometry.lerp(startMaxSize, targetMaxSize, fraction)
+  val actualMinSize = lerp(startMinSize, targetMinSize, fraction)
+  val actualMaxSize = lerp(startMaxSize, targetMaxSize, fraction)
 
   return Constraints(
-    minWidth = actualMinSize.width.toInt(),
-    minHeight = actualMinSize.height.toInt(),
+    minWidth = actualMinSize.width.coerceIn(0f, actualMaxSize.width).toInt(),
+    minHeight = actualMinSize.height.coerceIn(0f, actualMaxSize.height).toInt(),
     maxWidth = actualMaxSize.width.toInt(),
     maxHeight = actualMaxSize.height.toInt()
   )

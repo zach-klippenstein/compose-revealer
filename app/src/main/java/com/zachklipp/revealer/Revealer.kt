@@ -286,13 +286,12 @@ private class RevealerState : RevealerScope {
     }
 
     Layout(
-      // TODO can this be passed to the layout directly?
-      content = { Box(modifier) },
-      modifier = Modifier.onGloballyPositioned { coordinates ->
+      content = {},
+      modifier = modifier.onGloballyPositioned { coordinates ->
         controller.placeholderOffset =
           revealerCoordinates!!.localPositionOf(coordinates, Offset.Zero)
       }
-    ) { measurables, constraints ->
+    ) { _, constraints ->
       // This will ensure cachedPlaceholderSize is set.
       controller.updatePlaceholderConstraints(constraints)
 
@@ -303,20 +302,14 @@ private class RevealerState : RevealerScope {
       // size until the next frame when the new revealable will actually be calculated. If we just
       // measure the placeholder as zero initially, then when scrolling down, the new item will
       // jump fully into view.
-      val placeholderConstraints =
-        controller.cachedPlaceholderSize?.let { Constraints.fixed(it.width, it.height) }
-          ?: constraints
-      val placeholderPlaceable = measurables.single().measure(placeholderConstraints)
       val size = controller.cachedPlaceholderSize ?: IntSize(
-        placeholderPlaceable.width,
-        placeholderPlaceable.height
+        width = constraints.maxWidth,
+        height = constraints.maxHeight
       )
 
       println("OMG [$key] measured revealable: $size")
 
-      layout(width = size.width, height = size.height) {
-        placeholderPlaceable.placeRelative(0, 0)
-      }
+      layout(width = size.width, height = size.height) {}
     }
   }
 
