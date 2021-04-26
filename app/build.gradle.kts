@@ -9,7 +9,7 @@ android {
 
   defaultConfig {
     applicationId = "com.zachklipp.revealer"
-    minSdk = 21
+    minSdk = 24
     targetSdk = 30
     versionCode = 1
     versionName = "1.0"
